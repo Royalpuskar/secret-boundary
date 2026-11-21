@@ -1,0 +1,18 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
+import {mkdtempSync,readFileSync,writeFileSync,symlinkSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {fileURLToPath,pathToFileURL} from 'node:url';
+const cli=fileURLToPath(new URL('./redact.mjs',import.meta.url));
+const scenario={keys:['token'],paths:['/private'],record:{token:'SECRET_CANARY',private:'PRIVATE_CANARY',public:'visible'}};
+const exec=(args,input=JSON.stringify(scenario))=>spawnSync(process.execPath,[cli,...args],{input,encoding:'utf8',timeout:5000});
+const workspace=t=>{const dir=mkdtempSync(join(tmpdir(),'redact-test-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));return dir;};
+test('stdin redaction keeps public data and omits selected values',()=>{const r=exec(['-']);assert.equal(r.status,0);assert.equal(r.stderr,'');assert.deepEqual(JSON.parse(r.stdout),{token:'[REDACTED]',private:'[REDACTED]',public:'visible'});});
+test('file input creates separate audit without changing source',t=>{const dir=workspace(t),input=join(dir,'input.json'),audit=join(dir,'audit.json');const before=JSON.stringify(scenario);writeFileSync(input,before);const r=exec([input,'--audit',audit]);assert.equal(r.status,0);assert.equal(readFileSync(input,'utf8'),before);const text=readFileSync(audit,'utf8');assert.ok(!text.includes('CANARY'));assert.ok(!text.includes('visible'));assert.equal(JSON.parse(text).audit.length,2);});
+test('strict rejects unmatched paths before output or audit',t=>{const audit=join(workspace(t),'audit.json');const r=exec(['-','--audit',audit,'--strict'],JSON.stringify({...scenario,paths:['/missing']}));assert.equal(r.status,3);assert.equal(r.stdout,'');assert.throws(()=>readFileSync(audit));});
+test('existing audit and symlink destinations are never overwritten',t=>{const dir=workspace(t),audit=join(dir,'audit.json'),link=join(dir,'link.json');writeFileSync(audit,'KEEP');symlinkSync(audit,link);for(const target of [audit,link]){const r=exec(['-','--audit',target]);assert.equal(r.status,2);assert.equal(r.stdout,'');assert.equal(readFileSync(audit,'utf8'),'KEEP');}});
+test('invalid and oversized input emits no input snippets',()=>{for(const input of ['SECRET_CANARY{',' '.repeat(800001),Buffer.from([255])]){const r=exec(['-'],input);assert.equal(r.status,2);assert.equal(r.stdout,'');assert.ok(!r.stderr.includes('SECRET_CANARY'));}});
+test('symlink entry executes and importing has no CLI side effects',t=>{const link=join(workspace(t),'alias.mjs');symlinkSync(cli,link);const r=spawnSync(process.execPath,[link,'-'],{input:JSON.stringify(scenario),encoding:'utf8',timeout:5000});assert.equal(r.status,0);assert.equal(JSON.parse(r.stdout).public,'visible');const imported=spawnSync(process.execPath,['--input-type=module','-e',`await import(${JSON.stringify(pathToFileURL(cli).href)})`],{encoding:'utf8',timeout:5000});assert.equal(imported.status,0);assert.equal(imported.stdout,'');assert.equal(imported.stderr,'');});
+test('help and unknown flags have explicit exit codes',()=>{assert.equal(exec(['--help']).status,0);assert.equal(exec(['-','--unknown']).status,2);assert.equal(exec(['-','--audit']).status,2);});
