@@ -50,6 +50,25 @@ Open http://localhost:8000. Do not open index.html through a file URL; ES module
 node --test test.mjs
 ```
 
+## Command-line redaction
+
+Requires Node.js 22 or later. Save a complete engine input object containing `keys`, optional `paths`, and `record` as `scenario.json`.
+
+```sh
+node redact.mjs scenario.json --audit audit.json --strict > redacted.json
+cat scenario.json | node redact.mjs -
+node redact.mjs --help
+node --test test.mjs cli.test.mjs
+```
+
+The CLI reads the source without modifying it. Standard output contains only the redacted record. The optional audit contains rule paths, reasons, and counts, never the record output. Existing audit files and symbolic links are rejected; the CLI requests owner-only permissions when creating an audit file on systems supporting POSIX modes.
+
+Exit codes: **0** success; **2** invalid arguments, input, or audit-write failure; **3** unmatched exact paths in strict mode. Strict mode rejects before creating an audit or writing output. It does not check whether every field-name rule matched or discover secrets without explicit rules. Error messages omit input snippets.
+
+The input stream is capped at 800000 bytes, followed by the engine's 200000-character serialized limit. Invalid UTF-8 is rejected. The CLI buffers one JSON document; it is not a streaming JSONL processor. Audit paths may reveal sensitive field names. Shell redirection is controlled by your shell: never redirect output to your input file, and remember `>` can truncate an existing destination before the CLI starts. A downstream output failure can leave a successfully created audit; the two outputs are not a filesystem transaction.
+
+Seven CLI integration tests passed locally, including stdin/file input, source preservation, strict failure, exclusive audit creation, invalid input, symbolic-link entry, side-effect-free import, and argument handling. Together with the ten engine tests, **17 local tests passed**. The workflow now runs both suites; remote CI results have not been verified.
+
 ## Example and schema
 
 The complete example in `sample.mjs` defines the supported input shape:
